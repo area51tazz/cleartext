@@ -1,0 +1,45 @@
+# WhisperLive - Native ARM64 build
+# Optimised for Apple Silicon (M1/M2/M3) Mac via Docker Desktop
+# Also runs natively on any arm64 Linux host
+#
+# Build:   docker build -f Dockerfile.arm64 -t whisperlive-arm64 .
+# Via compose: docker compose --profile mac up
+
+FROM python:3.11-slim-bookworm
+
+# ── System deps ──────────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    portaudio19-dev \
+    libsndfile1 \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ── Python deps ───────────────────────────────────────────────────────────────
+# CTranslate2 (faster-whisper's engine) has native arm64 wheels as of v3+
+RUN pip install --no-cache-dir \
+    "faster-whisper>=1.0.0" \
+    "torch>=2.1.0" \
+    "torchaudio>=2.1.0" \
+    "whisper-live"
+
+# ── App files ─────────────────────────────────────────────────────────────────
+COPY run_server.py .
+
+# ── Model cache mount point ───────────────────────────────────────────────────
+RUN mkdir -p /root/.cache/whisper-live
+
+# ── Runtime config (override via docker-compose environment or -e flags) ──────
+ENV WHISPER_BACKEND=faster_whisper \
+    WHISPER_HOST=0.0.0.0 \
+    WHISPER_PORT=9090 \
+    WHISPER_MODEL=small \
+    MAX_CLIENTS=4 \
+    MAX_CONNECTION_TIME=600 \
+    OMP_NUM_THREADS=4
+
+EXPOSE 9090
+
+CMD ["python3", "run_server.py"]

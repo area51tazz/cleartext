@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Transcript</title>
+<style>
+  /* ── Local fonts (offline-safe) ── */
+  @font-face {
+    font-family: 'Inter';
+    src: url('fonts/Inter.ttf') format('truetype');
+    font-weight: 300 700;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono';
+    src: url('fonts/JetBrainsMono-Light.ttf') format('truetype');
+    font-weight: 300;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono';
+    src: url('fonts/JetBrainsMono-Regular.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+  }
+  :root {
+    --bg: #0a0a0a;
+    --surface: #111111;
+    --border: #1e1e1e;
+    --text-dim: #333;
+    --text-mid: #666;
+    --text-live: #e8e8e8;
+    --text-pending: #aaa;
+    --status-ok: #22c55e;
+    --status-err: #ef4444;
+    --status-wait: #f59e0b;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text-live);
+    font-family: 'Inter', sans-serif;
+    overflow: hidden;
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Ccircle cx='8' cy='8' r='4' fill='white' opacity='0.7'/%3E%3C/svg%3E") 8 8, auto;
+  }
+
+  /* ── Ambient background grain ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+    opacity: 0.025;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Layout ── */
+  #app {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    height: 100vh;
+    padding: 48px 80px 40px;
+    gap: 0;
+  }
+
+  /* ── Header bar ── */
+  #header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 28px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0;
+  }
+
+  #title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 300;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--text-mid);
+  }
+
+  #status-area {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 300;
+    color: var(--text-mid);
+    letter-spacing: 0.05em;
+  }
+
+  #status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--status-wait);
+    transition: background 0.4s;
+    flex-shrink: 0;
+  }
+  #status-dot.connected  { background: var(--status-ok); }
+  #status-dot.error      { background: var(--status-err); animation: pulse-err 1s infinite; }
+  #status-dot.connecting { background: var(--status-wait); animation: pulse-wait 1.2s infinite; }
+
+  @keyframes pulse-err  { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  @keyframes pulse-wait { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* ── Transcript area ── */
+  #transcript-wrap {
+    position: relative;
+    overflow: hidden;
+    padding-top: 40px;
+  }
+
+  /* Top fade */
+  #transcript-wrap::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 120px;
+    background: linear-gradient(to bottom, var(--bg) 0%, transparent 100%);
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  #transcript {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 0 0 8px 0;
+  }
+
+  /* ── Segments ── */
+  .segment {
+    margin-bottom: 0;
+    line-height: 1.55;
+    opacity: 0;
+    animation: fadeIn 0.35s ease forwards;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .segment-text {
+    font-size: clamp(28px, 3.5vw, 52px);
+    color: var(--text-live);
+    display: inline;
+  }
+
+  /* New paragraph after a silence gap */
+  .segment.para-break {
+    margin-top: 28px;
+  }
+
+  /* In-progress (pending) segment */
+  .segment.pending .segment-text {
+    color: var(--text-pending);
+    font-style: italic;
+  }
+
+  /* Blinking cursor on pending */
+  .segment.pending .segment-text::after {
+    content: '▎';
+    animation: blink 0.9s step-end infinite;
+    opacity: 0.6;
+    margin-left: 2px;
+    font-style: normal;
+  }
+  @keyframes blink { 0%,100%{opacity:0.6} 50%{opacity:0} }
+
+  /* ── Footer ── */
+  #footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+  }
+
+  #word-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 300;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+  }
+
+  /* ── Connection overlay ── */
+  #overlay {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    z-index: 100;
+    transition: opacity 0.6s;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+
+  #overlay-icon {
+    font-size: 48px;
+    opacity: 0.15;
+  }
+
+  #overlay-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 300;
+    color: var(--text-mid);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+
+  #overlay-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+    margin-top: -8px;
+  }
+
+  /* ── Config panel (press C) ── */
+  #config-panel {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 32px 40px;
+    width: 420px;
+    z-index: 200;
+    display: none;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  #config-panel.open { display: block; }
+
+  #config-panel h2 {
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-mid);
+    margin-bottom: 24px;
+  }
+
+  .config-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 20px;
+  }
+  .config-row label {
+    font-size: 11px;
+    color: var(--text-mid);
+    letter-spacing: 0.1em;
+  }
+  .config-row input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-live);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    padding: 10px 12px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .config-row input:focus { border-color: var(--text-mid); }
+
+  #config-save {
+    width: 100%;
+    background: var(--text-live);
+    color: var(--bg);
+    border: none;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 12px;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+  #config-save:hover { opacity: 0.85; }
+
+  #config-hint {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 16px;
+    letter-spacing: 0.08em;
+  }
+
+  /* ── Mobile ── */
+  @media (max-width: 768px) {
+    #app { padding: 20px 24px 16px; }
+    .segment-text { font-size: clamp(18px, 5vw, 28px); }
+    .segment.para-break { margin-top: 18px; }
+    #transcript-wrap { padding-top: 20px; }
+    #transcript-wrap::before { height: 60px; }
+    #config-panel { width: calc(100% - 32px); padding: 24px; }
+    #header { padding-bottom: 16px; }
+    #footer { padding-top: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Connection overlay -->
+<div id="overlay">
+  <div id="overlay-icon">◎</div>
+  <div id="overlay-text">Waiting for signal</div>
+  <div id="overlay-sub" id="overlay-addr"></div>
+</div>
+
+<!-- Config panel -->
+<div id="config-panel">
+  <h2>Connection</h2>
+  <div class="config-row">
+    <label>WHISPERLIVE SERVER</label>
+    <input type="text" id="cfg-host" placeholder="localhost:9090">
+  </div>
+  <div class="config-row">
+    <label>EVENT NAME (shown in header)</label>
+    <input type="text" id="cfg-title" placeholder="Live Transcript">
+  </div>
+  <button id="config-save">Connect</button>
+  <div id="config-hint">Press C to open / close this panel · Press F for fullscreen</div>
+</div>
+
+<!-- Main UI -->
+<div id="app">
+  <div id="header">
+    <div id="title">Live Transcript</div>
+    <div id="status-area">
+      <div id="status-dot" class="connecting"></div>
+      <span id="status-text">Connecting…</span>
+    </div>
+  </div>
+
+  <div id="transcript-wrap">
+    <div id="transcript"></div>
+  </div>
+
+  <div id="footer">
+    <div id="word-count"></div>
+  </div>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+// Auto-detect server address: if page was loaded over HTTP, use that hostname
+// so remote clients (phones, tablets) connect to the right server automatically
+const AUTO_HOST = (location.hostname && location.hostname !== '')
+  ? location.hostname + ':9090'
+  : 'localhost:9090';
+
+const DEFAULTS = {
+  host: AUTO_HOST,
+  title: 'Live Transcript',
+};
+
+let cfg = { ...DEFAULTS };
+
+// Persist config in memory (sessionStorage not available in all embedded contexts)
+function loadConfig() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('wl-cfg') || '{}');
+    cfg = { ...DEFAULTS, ...saved };
+  } catch(e) { cfg = { ...DEFAULTS }; }
+}
+function saveConfig() {
+  try { sessionStorage.setItem('wl-cfg', JSON.stringify(cfg)); } catch(e) {}
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let ws = null;
+let reconnectTimer = null;
+let pendingEl = null;        // the in-progress segment element
+let wordCount = 0;
+let lastMessageTime = null;  // timestamp of last received WebSocket message
+let stalenessInterval = null;
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const overlayEl     = document.getElementById('overlay');
+const overlayText   = document.getElementById('overlay-text');
+const overlaySub    = document.getElementById('overlay-sub');
+const transcriptEl  = document.getElementById('transcript');
+const statusDot     = document.getElementById('status-dot');
+const statusText    = document.getElementById('status-text');
+const titleEl       = document.getElementById('title');
+const wordCountEl   = document.getElementById('word-count');
+
+// ── Config panel ──────────────────────────────────────────────────────────────
+const configPanel  = document.getElementById('config-panel');
+const cfgHost      = document.getElementById('cfg-host');
+const cfgTitle     = document.getElementById('cfg-title');
+const configSave   = document.getElementById('config-save');
+
+function openConfig() {
+  cfgHost.value    = cfg.host;
+  cfgTitle.value   = cfg.title;
+  configPanel.classList.add('open');
+  cfgHost.focus();
+}
+function closeConfig() { configPanel.classList.remove('open'); }
+
+configSave.addEventListener('click', () => {
+  cfg.host  = cfgHost.value.trim() || DEFAULTS.host;
+  cfg.title = cfgTitle.value.trim() || DEFAULTS.title;
+  saveConfig();
+  titleEl.textContent = cfg.title;
+  closeConfig();
+  connect();
+});
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'c' || e.key === 'C') {
+    configPanel.classList.contains('open') ? closeConfig() : openConfig();
+  }
+  if (e.key === 'f' || e.key === 'F') {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+    else document.exitFullscreen();
+  }
+  if (e.key === 'Escape') closeConfig();
+  if (e.key === 'r' || e.key === 'R') clearTranscript();
+});
+
+// ── Status helpers ────────────────────────────────────────────────────────────
+function setStatus(state, msg) {
+  statusDot.className = state;
+  statusText.textContent = msg;
+}
+
+function showOverlay(msg, sub='') {
+  overlayText.textContent = msg;
+  overlaySub.textContent  = sub;
+  overlayEl.classList.remove('hidden');
+}
+function hideOverlay() { overlayEl.classList.add('hidden'); }
+
+// ── Heartbeat staleness monitor ──────────────────────────────────────────────
+function startStalenessMonitor() {
+  if (stalenessInterval) clearInterval(stalenessInterval);
+  stalenessInterval = setInterval(() => {
+    if (!lastMessageTime) return;
+    const elapsed = (Date.now() - lastMessageTime) / 1000;
+    if (elapsed > 15) {
+      setStatus('error', 'No signal — check server');
+    } else if (elapsed > 8) {
+      setStatus('connecting', 'Signal delayed…');
+    }
+  }, 2000);
+}
+function stopStalenessMonitor() {
+  if (stalenessInterval) { clearInterval(stalenessInterval); stalenessInterval = null; }
+}
+
+// ── Transcript rendering ──────────────────────────────────────────────────────
+function clearTranscript() {
+  transcriptEl.innerHTML = '';
+  pendingEl = null;
+  wordCount = 0;
+  updateWordCount();
+}
+
+const MAX_SEGMENTS = 200;  // prune old segments to prevent DOM bloat during long events
+
+const PARA_GAP_SEC = 3.0;  // seconds of server-measured silence before paragraph break
+
+function addSegment(text, isPending = false, silenceSec = 0) {
+  // Remove old pending element
+  if (pendingEl) { pendingEl.remove(); pendingEl = null; }
+
+  // Paragraph break based on actual silence duration from server, not client timing
+  const isParaBreak = !isPending && silenceSec >= PARA_GAP_SEC;
+
+  const seg = document.createElement('div');
+  seg.className = 'segment' + (isPending ? ' pending' : '') + (isParaBreak ? ' para-break' : '');
+
+  const span = document.createElement('span');
+  span.className = 'segment-text';
+  span.textContent = text;
+  seg.appendChild(span);
+
+  transcriptEl.appendChild(seg);
+
+  if (isPending) pendingEl = seg;
+
+  // Count words
+  if (!isPending) {
+    wordCount += text.trim().split(/\s+/).filter(Boolean).length;
+    updateWordCount();
+  }
+
+  // Prune old segments to keep DOM lean during long events
+  // (CSS bottom:0 + overflow:hidden already hides them, but they still cost memory)
+  const segments = transcriptEl.querySelectorAll('.segment:not(.pending)');
+  if (segments.length > MAX_SEGMENTS) {
+    const toRemove = segments.length - MAX_SEGMENTS;
+    for (let i = 0; i < toRemove; i++) {
+      segments[i].remove();
+    }
+  }
+}
+
+// Scrolling is handled entirely by CSS: #transcript has position:absolute; bottom:0
+// which anchors newest content at the bottom of the viewport. Older content extends
+// above the wrapper and is clipped by overflow:hidden. No JS scroll needed.
+
+function updateWordCount() {
+  wordCountEl.textContent = wordCount > 0 ? `${wordCount.toLocaleString()} words` : '';
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connect() {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  clearTimeout(reconnectTimer);
+
+  const url = `ws://${cfg.host}`;
+  setStatus('connecting', `Connecting to ${cfg.host}…`);
+  showOverlay('Waiting for signal', cfg.host);
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    setStatus('connected', `Connected · ${cfg.host}`);
+    lastMessageTime = Date.now();
+    startStalenessMonitor();
+    hideOverlay();
+    // Send client hello that WhisperLive expects
+    ws.send(JSON.stringify({
+      uid: crypto.randomUUID(),
+      language: null,   // auto-detect
+      task: 'transcribe',
+      model: 'small',
+      use_vad: true,
+    }));
+  };
+
+  ws.onmessage = (event) => {
+    let data;
+    try { data = JSON.parse(event.data); } catch(e) { return; }
+
+    // Reset staleness clock on any message
+    lastMessageTime = Date.now();
+    if (statusDot.className !== 'connected') {
+      setStatus('connected', `Connected · ${cfg.host}`);
+    }
+
+    // Heartbeat — staleness timer already reset above, nothing to render
+    if (data.type === 'heartbeat') return;
+
+    // WhisperLive sends { uid, segments: [{text, start, end, completed}] }
+    // or { message: "WAIT" } / { message: "SERVER_READY" }
+    if (data.message === 'FULL') {
+      setStatus('error', 'Server full — too many viewers');
+      showOverlay('Server full', `Max ${data.max_clients} viewers reached. Will retry…`);
+      return;
+    }
+    if (data.message === 'WAIT') {
+      setStatus('connecting', 'Server busy — waiting…');
+      return;
+    }
+    if (data.message === 'SERVER_READY') {
+      setStatus('connected', `Ready · ${cfg.host}`);
+      return;
+    }
+
+    const segs = data.segments;
+    const silenceSec = data.silence_sec || 0;
+    if (!Array.isArray(segs) || segs.length === 0) return;
+
+    // Last segment may be in-progress (not completed)
+    const last = segs[segs.length - 1];
+    const completed = segs.filter(s => s.completed !== false);
+
+    // Render all completed segments
+    completed.forEach(s => {
+      const text = (s.text || '').trim();
+      if (!text) return;
+      addSegment(text, false, silenceSec);
+    });
+
+    // Show last segment as pending if not completed
+    if (last && last.completed === false) {
+      const text = (last.text || '').trim();
+      if (text) addSegment(text, true);
+    }
+  };
+
+  ws.onerror = () => {
+    setStatus('error', 'Connection error');
+  };
+
+  ws.onclose = () => {
+    stopStalenessMonitor();
+    setStatus('error', 'Disconnected — retrying…');
+    showOverlay('Signal lost', `Reconnecting to ${cfg.host}…`);
+    reconnectTimer = setTimeout(connect, 3000);
+  };
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadConfig();
+titleEl.textContent = cfg.title;
+
+// If no config saved, show config panel first
+const hasSaved = (() => { try { return !!sessionStorage.getItem('wl-cfg'); } catch(e){ return false; }})();
+if (!hasSaved) {
+  openConfig();
+} else {
+  connect();
+}
+
+// Auto-fullscreen hint after 3s if not already fullscreen
+setTimeout(() => {
+  if (!document.fullscreenElement && !configPanel.classList.contains('open')) {
+    console.info('Tip: press F for fullscreen, C to configure server address');
+  }
+}, 3000);
+</script>
+</body>
+</html>

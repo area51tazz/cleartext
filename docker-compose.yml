@@ -1,0 +1,110 @@
+# WhisperLive Docker Compose
+# ─────────────────────────────────────────────────────────────────────────────
+# USAGE:
+#
+#   Mac (Apple Silicon) — builds native ARM image locally:
+#     docker compose --profile mac up
+#
+#   NUC / x86 CPU-only:
+#     docker compose --profile cpu up
+#
+#   NUC / x86 with NVIDIA GPU:
+#     docker compose --profile gpu up
+#
+#   Run client (once server is up):
+#     docker compose run --rm client
+#
+# First run downloads the Whisper model (~460MB for "small") into ./models/
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Apple Silicon (arm64 native) ───────────────────────────────────────────
+  whisperlive-mac:
+    profiles: ["mac"]
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
+      platforms:
+        - linux/arm64
+    image: whisperlive-arm64:local
+    container_name: whisperlive
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./models:/root/.cache/whisper-live
+    environment:
+      - OMP_NUM_THREADS=4           # tune to your Mac's efficiency core count
+      - WHISPER_MODEL=small         # tiny | base | small | medium | large-v3
+      - MAX_CLIENTS=4
+      - MAX_CONNECTION_TIME=600
+    command: >
+      python3 -c "
+      from whisper_live.server import TranscriptionServer;
+      import os;
+      server = TranscriptionServer();
+      server.run('0.0.0.0', port=9090, backend='faster_whisper')
+      "
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',9090), timeout=5); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s   # model download on first boot
+
+  # ── NUC / x86_64 CPU-only ─────────────────────────────────────────────────
+  whisperlive-cpu:
+    profiles: ["cpu"]
+    image: ghcr.io/collabora/whisperlive-cpu:latest
+    container_name: whisperlive
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./models:/root/.cache/whisper-live
+    environment:
+      - OMP_NUM_THREADS=8
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',9090), timeout=5); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── NUC / x86_64 with NVIDIA GPU ──────────────────────────────────────────
+  whisperlive-gpu:
+    profiles: ["gpu"]
+    image: ghcr.io/collabora/whisperlive-gpu:latest
+    container_name: whisperlive
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./models:/root/.cache/whisper-live
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',9090), timeout=5); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Transcription client (optional, for quick testing) ────────────────────
+  client:
+    profiles: ["client"]
+    image: ghcr.io/collabora/whisperlive-cpu:latest
+    container_name: whisperlive-client
+    depends_on:
+      - whisperlive-mac   # override with --profile cpu|gpu as needed
+    network_mode: host    # simplest way to reach the server on localhost:9090
+    entrypoint: ["python3", "run_client.py"]
+    command: ["--server", "localhost", "--port", "9090", "--lang", "en"]
+    volumes:
+      - ./audio:/audio    # mount audio files here for testing
