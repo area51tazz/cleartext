@@ -6,157 +6,185 @@ Real-time speech transcription for live events — displayed on a TV or any scre
 
 ---
 
-## How it works
+## What it does
 
-A laptop listens to a microphone, transcribes speech using [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and broadcasts a rolling transcript over WebSocket. Any device on the same network — TV, phone, tablet, laptop — can open the display in a browser.
+You run this on a laptop. It listens to a microphone, converts speech to text in near real-time, and shows a rolling transcript on any screen — a TV over HDMI, or any phone/tablet/laptop on the same WiFi.
 
-```
-Microphone → server.py → WebSocket (port 9090)
-                       → display.html (TV, phones, tablets)
-```
-
-Silence gaps between speakers automatically start a new paragraph. The display is fullscreen, high-contrast, and readable from across a room.
+Silence gaps between speakers automatically create a new paragraph. The display is large, high-contrast, and readable from across a room.
 
 ---
 
-## Quick start — Ubuntu (recommended)
+## System requirements
 
-**One-time setup** (needs internet + sudo, ~5–10 minutes):
+### Ubuntu (recommended path)
+
+| Requirement | Minimum | Notes |
+|-------------|---------|-------|
+| OS | Ubuntu 20.04+ | Other Linux distros may work with minor adjustments |
+| Python | 3.9+ | Usually pre-installed on Ubuntu |
+| RAM | 4GB | 8GB+ recommended |
+| Disk | 5GB free | ~1.5GB for the AI model, rest for dependencies |
+| CPU | Any modern x86_64 | Works without a GPU |
+| GPU | NVIDIA (optional) | Cuts transcription delay from ~5s to under 1s |
+| Microphone | Any | USB mic or XLR interface recommended for rooms |
+
+### Mac / other hardware (Docker path)
+
+| Requirement | Notes |
+|-------------|-------|
+| Docker Desktop | [Install here](https://docs.docker.com/desktop/) |
+| Apple Silicon or x86_64 | M1/M2/M3 Macs work great |
+| 8GB RAM | Model download ~460MB–1.5GB depending on quality setting |
+
+---
+
+## Setup — Ubuntu
+
+> **You only do this once, before the event.** You'll need internet access and administrator (sudo) access on the laptop.
+
+**Step 1: Get the code**
+
+Open a terminal and run:
 
 ```bash
 git clone https://github.com/area51tazz/cleartext.git
 cd cleartext
+```
+
+> If you don't have `git`, run `sudo apt install git` first.
+
+**Step 2: Run setup**
+
+```bash
 bash setup.sh
 ```
 
-This installs dependencies, creates a Python venv, downloads the Whisper model, bundles fonts, and creates a desktop shortcut.
+This will:
+- Install required system packages (needs your sudo password once)
+- Create a self-contained Python environment in a `.venv/` folder — this keeps all dependencies isolated from the rest of your system and means you don't need to install anything globally
+- Detect whether you have an NVIDIA GPU and install the right version of PyTorch automatically
+- Download the Whisper AI model (~1.5GB, happens once)
+- Download fonts so the display works offline
+- Create a "Start Transcription" shortcut on your Desktop
 
-**Event day** (no internet needed):
+This takes about 5–10 minutes depending on your internet speed.
+
+**That's it for setup.** Everything is self-contained in the `cleartext/` folder. To uninstall, just delete the folder.
+
+---
+
+## Running on event day — Ubuntu
+
+Double-click **"Start Transcription"** on your Desktop, or open a terminal and run:
 
 ```bash
 bash start.sh
 ```
 
-The display opens automatically in your browser. Drag it to the HDMI-connected TV and press **F** for fullscreen.
+What happens:
+1. Checks that a microphone is connected
+2. Starts the transcription server
+3. Opens the display in your browser automatically after ~4 seconds
+4. Prints a URL like `http://192.168.x.x:8080/display.html` for audience access
 
-### Audience access
+**To show on a TV:** drag the browser window to your HDMI-connected display and press **F** for fullscreen.
 
-`start.sh` prints a URL like `http://192.168.x.x:8080/display.html`. Anyone on the same WiFi can open it on their phone or laptop — the WebSocket address is detected automatically, no configuration needed.
+**To give audience access:** share the printed URL. Anyone on the same WiFi can open it on their phone or laptop — no app to install, no configuration needed.
+
+Press **Ctrl+C** in the terminal to stop. The server auto-restarts if it crashes (up to 5 times).
 
 ---
 
-## Quick start — Docker (Mac / NUC / homelab)
+## Setup & running — Mac / Docker
 
 ```bash
 git clone https://github.com/area51tazz/cleartext.git
 cd cleartext
 
 # Apple Silicon Mac
-docker compose --profile mac build   # first time only
+docker compose --profile mac build   # first time only (~5 mins)
 docker compose --profile mac up -d
 
-# x86 CPU-only
+# x86 CPU-only (NUC, PC)
 docker compose --profile cpu up -d
 
 # x86 + NVIDIA GPU
 docker compose --profile gpu up -d
 ```
 
-Then open `display.html` in a browser and press **C** to configure the server address.
-
-### Docker deployment profiles
+Then open `display.html` in a browser. Press **C** to enter the server address (`localhost:9090`) and your event name.
 
 | Profile | Target | Notes |
 |---------|--------|-------|
-| `mac` | Apple Silicon | Built locally (ARM64), CPU-only |
-| `cpu` | x86_64 NUC | Pre-built image, pull-and-run |
+| `mac` | Apple Silicon Mac | Built locally, CPU-only |
+| `cpu` | x86_64, no GPU | Pre-built image, pull-and-run |
 | `gpu` | x86_64 + NVIDIA | Requires nvidia-container-toolkit |
 
 ---
 
-## Display features
-
-- **Fullscreen, dark background** — readable from across a large room
-- **Paragraph breaks** — silence gaps of 3+ seconds start a new paragraph automatically
-- **Status dot** — green (live), amber (signal delayed 8s+), red (no signal 15s+)
-- **Auto-reconnect** — clients reconnect automatically if the server restarts
-- **Multi-client** — up to 50 simultaneous viewers (configurable)
-- **Mobile responsive** — works on phones and tablets
-- **Offline fonts** — Inter + JetBrains Mono bundled, no internet needed
-
-### Keyboard shortcuts
+## Display controls
 
 | Key | Action |
 |-----|--------|
 | `F` | Toggle fullscreen |
-| `C` | Open config panel (server address, event name) |
+| `C` | Open settings (server address, event name) |
 | `R` | Clear transcript |
-| `Esc` | Close config panel |
+| `Esc` | Close settings |
+
+**Status dot** (top right):
+- Green — live and receiving
+- Amber — connected but no signal for 8+ seconds
+- Red — disconnected or no signal for 15+ seconds
 
 ---
 
-## Configuration
+## Transcription quality
 
-### Ubuntu native (server.py / start.sh)
+The `medium` model is the default and works well for most accents and environments. If you need higher accuracy (e.g. strong accents, technical vocabulary), use `large-v3` — but it's slower on CPU.
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `WHISPER_MODEL` | `medium` | Model size: `small`, `medium`, `large-v3` |
-| `WHISPER_PORT` | `9090` | WebSocket port |
-| `HTTP_PORT` | `8080` | Display HTTP server port |
-| `MAX_CLIENTS` | `50` | Max simultaneous display connections |
+| Model | Download size | GPU delay | CPU delay |
+|-------|--------------|-----------|-----------|
+| small | 460MB | <1s | ~2-3s |
+| **medium** _(default)_ | 1.5GB | <1s | ~5-8s |
+| large-v3 | 3GB | ~1s | 15s+ |
 
+To change model (Ubuntu):
 ```bash
 WHISPER_MODEL=large-v3 bash start.sh
 ```
 
-### Docker (run_server.py)
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `WHISPER_MODEL` | `small` | Model size |
-| `WHISPER_BACKEND` | `faster_whisper` | Backend engine |
-| `MAX_CLIENTS` | `4` | Concurrent client limit |
-| `MAX_CONNECTION_TIME` | `600` | Client timeout (seconds) |
-| `OMP_NUM_THREADS` | `4` | CPU thread count |
-
-### Model size guide
-
-| Model | Size | GPU latency | CPU latency | Notes |
-|-------|------|-------------|-------------|-------|
-| small | 460MB | <1s | ~2-3s | Fast, good for clear speech |
-| **medium** | 1.5GB | <1s | ~5-8s | **Default — best balance** |
-| large-v3 | 3GB | ~1s | ~15s+ | Best accuracy, slow on CPU |
-
----
-
-## Hardware
-
-**Best:** Ubuntu laptop with NVIDIA GPU — sub-second latency, simple mic setup.
-
-**Also works:** Any x86/ARM64 machine with Docker. CPU-only is fine for small events (medium model ~5-8s latency). GPU drops that to under 1 second.
+To change model (setup, so it downloads the right one):
+```bash
+WHISPER_MODEL=large-v3 bash setup.sh
+```
 
 ---
 
 ## Troubleshooting
 
-**No microphone detected on startup**
-Plug in a microphone and re-run `start.sh`. The built-in mic works; a USB or XLR interface is better for a room.
+**"No microphone detected"**
+Plug in a microphone and re-run `start.sh`. Built-in laptop mics work but pick up a lot of room noise — a USB mic or lavalier is better for events.
 
-**Display connects but text stops appearing**
-The server logs to `transcription-YYYY-MM-DD.log` — check that for errors. The status dot will go amber/red if the server stops sending.
-
-**Transcript appears on server but not in browser**
-Check that port 9090 isn't blocked by a firewall. On Ubuntu: `sudo ufw allow 9090`.
-
-**Docker: slow transcription**
-Lower `OMP_NUM_THREADS` — too many threads can hurt performance. Try `OMP_NUM_THREADS=4` as a baseline.
-
-**Docker: build fails on M1/M2/M3**
-Make sure Docker Desktop is the Apple Silicon native version (not Rosetta):
+**Text appears in the terminal but not in the browser**
+Make sure ports 9090 and 8080 are not blocked. On Ubuntu:
 ```bash
-docker info | grep Architecture   # should show aarch64 or arm64
+sudo ufw allow 9090
+sudo ufw allow 8080
 ```
 
-**Port conflict**
-Change `HTTP_PORT` or `WHISPER_PORT` via environment variable, or edit the port mapping in `docker-compose.yml`.
+**Display connects but text stops updating**
+The status dot will turn amber then red. The server logs to `transcription-YYYY-MM-DD.log` in the project folder — that's the first place to look. Restarting `start.sh` usually recovers it.
+
+**Docker: build fails on M1/M2/M3**
+Make sure you installed the Apple Silicon version of Docker Desktop (not Rosetta). Check with:
+```bash
+docker info | grep Architecture   # should show: aarch64 or arm64
+```
+
+**Docker: first start is slow**
+It's downloading the AI model (~460MB for `small`). Watch progress with `docker compose logs -f` — it's ready when you see `Model loaded`.
+
+**Port already in use**
+```bash
+HTTP_PORT=8081 WHISPER_PORT=9091 bash start.sh
+```
