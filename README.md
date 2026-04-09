@@ -16,25 +16,15 @@ Silence gaps between speakers automatically create a new paragraph. The display 
 
 ## System requirements
 
-### Ubuntu (recommended path)
-
 | Requirement | Minimum | Notes |
 |-------------|---------|-------|
-| OS | Ubuntu 20.04+ | Other Linux distros may work with minor adjustments |
-| Python | 3.9+ | Usually pre-installed on Ubuntu |
+| OS | Ubuntu 20.04+, macOS 12+, or Windows 11 (WSL2) | |
+| Python | 3.9+ | Pre-installed on Ubuntu and macOS |
 | RAM | 4GB | 8GB+ recommended |
 | Disk | 5GB free | ~1.5GB for the AI model, rest for dependencies |
-| CPU | Any modern x86_64 | Works without a GPU |
+| CPU | Any modern x86_64 or Apple Silicon | Works without a GPU |
 | GPU | NVIDIA (optional) | Cuts transcription delay from ~5s to under 1s |
 | Microphone | Any | USB mic or XLR interface recommended for rooms |
-
-### Mac / other hardware (Docker path)
-
-| Requirement | Notes |
-|-------------|-------|
-| Docker Desktop | [Install here](https://docs.docker.com/desktop/) |
-| Apple Silicon or x86_64 | M1/M2/M3 Macs work great |
-| 8GB RAM | Model download ~460MB–1.5GB depending on quality setting |
 
 ---
 
@@ -73,6 +63,79 @@ This takes about 5–10 minutes depending on your internet speed.
 
 ---
 
+## Setup — macOS
+
+> Requires [Homebrew](https://brew.sh). If you don't have it, install it first.
+
+```bash
+git clone https://github.com/area51tazz/cleartext.git
+cd cleartext
+bash setup-mac.sh
+```
+
+This installs Python, PortAudio, and FFmpeg via Homebrew, creates the same self-contained `.venv/`, downloads the model and fonts.
+
+To run on event day:
+
+```bash
+bash start.sh
+```
+
+The first time you start it, macOS will ask permission to access the microphone — approve it in **System Settings → Privacy & Security → Microphone**.
+
+---
+
+## Setup — Windows (WSL2)
+
+> Cleartext runs inside [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) on Windows 11. WSL2 doesn't expose your microphone by default, so there's an extra step to share it.
+
+**Step 1: Install WSL2 and Ubuntu**
+
+In PowerShell (as Administrator):
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Reboot when prompted, then open **Ubuntu** from the Start menu.
+
+**Step 2: Share your microphone with WSL2**
+
+WSL2 needs USB passthrough to see your mic. Install [usbipd-win](https://github.com/dorssel/usbipd-win/releases) on Windows, then in PowerShell (as Administrator):
+
+```powershell
+usbipd list                              # find your mic's BUSID, e.g. 2-3
+usbipd bind --busid 2-3                  # one-time
+usbipd attach --wsl --busid 2-3          # each session
+```
+
+In your Ubuntu (WSL) terminal, confirm the mic is visible:
+
+```bash
+arecord -l    # should list your mic
+```
+
+**Step 3: Run the Ubuntu setup**
+
+Inside the Ubuntu terminal:
+
+```bash
+sudo apt update && sudo apt install -y git
+git clone https://github.com/area51tazz/cleartext.git
+cd cleartext
+bash setup.sh
+```
+
+To run on event day:
+
+```bash
+bash start.sh
+```
+
+The display URL will work from any browser on your Windows host or any other device on the same network.
+
+---
+
 ## Running on event day — Ubuntu
 
 Double-click **"Start Transcription"** on your Desktop, or open a terminal and run:
@@ -92,33 +155,6 @@ What happens:
 **To give audience access:** share the printed URL. Anyone on the same WiFi can open it on their phone or laptop — no app to install, no configuration needed.
 
 Press **Ctrl+C** in the terminal to stop. The server auto-restarts if it crashes (up to 5 times).
-
----
-
-## Setup & running — Mac / Docker
-
-```bash
-git clone https://github.com/area51tazz/cleartext.git
-cd cleartext
-
-# Apple Silicon Mac
-docker compose --profile mac build   # first time only (~5 mins)
-docker compose --profile mac up -d
-
-# x86 CPU-only (NUC, PC)
-docker compose --profile cpu up -d
-
-# x86 + NVIDIA GPU
-docker compose --profile gpu up -d
-```
-
-Then open `display.html` in a browser. Press **C** to enter the server address (`localhost:9090`) and your event name.
-
-| Profile | Target | Notes |
-|---------|--------|-------|
-| `mac` | Apple Silicon Mac | Built locally, CPU-only |
-| `cpu` | x86_64, no GPU | Pre-built image, pull-and-run |
-| `gpu` | x86_64 + NVIDIA | Requires nvidia-container-toolkit |
 
 ---
 
@@ -148,14 +184,15 @@ The `medium` model is the default and works well for most accents and environmen
 | **medium** _(default)_ | 1.5GB | <1s | ~5-8s |
 | large-v3 | 3GB | ~1s | 15s+ |
 
-To change model (Ubuntu):
+To change model:
 ```bash
 WHISPER_MODEL=large-v3 bash start.sh
 ```
 
-To change model (setup, so it downloads the right one):
+To change the model that gets downloaded during setup:
 ```bash
-WHISPER_MODEL=large-v3 bash setup.sh
+WHISPER_MODEL=large-v3 bash setup.sh        # Ubuntu / WSL
+WHISPER_MODEL=large-v3 bash setup-mac.sh    # macOS
 ```
 
 ---
@@ -175,16 +212,38 @@ sudo ufw allow 8080
 **Display connects but text stops updating**
 The status dot will turn amber then red. The server logs to `transcription-YYYY-MM-DD.log` in the project folder — that's the first place to look. Restarting `start.sh` usually recovers it.
 
-**Docker: build fails on M1/M2/M3**
-Make sure you installed the Apple Silicon version of Docker Desktop (not Rosetta). Check with:
-```bash
-docker info | grep Architecture   # should show: aarch64 or arm64
-```
+**macOS: "operation not permitted" or no audio**
+macOS blocks mic access until you grant it. Open **System Settings → Privacy & Security → Microphone** and enable Terminal (or whichever app you're running `start.sh` from). Restart `start.sh` after granting permission.
 
-**Docker: first start is slow**
-It's downloading the AI model (~460MB for `small`). Watch progress with `docker compose logs -f` — it's ready when you see `Model loaded`.
+**WSL: `arecord -l` shows no devices**
+Your mic isn't shared with WSL yet. From an Administrator PowerShell, run `usbipd list` to find your mic's BUSID, then `usbipd attach --wsl --busid <id>`. You need to re-run `attach` after every reboot.
 
 **Port already in use**
 ```bash
 HTTP_PORT=8081 WHISPER_PORT=9091 bash start.sh
 ```
+
+---
+
+## Credits
+
+Cleartext is a thin layer over a stack of excellent open-source projects. If this tool is useful to you, the credit belongs to them:
+
+- **[OpenAI Whisper](https://github.com/openai/whisper)** — the speech-recognition model that does the actual transcription. Released under MIT license.
+- **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** — a re-implementation of Whisper using CTranslate2, ~4× faster and uses less memory. The reason this runs in real time on a laptop. MIT license.
+- **[CTranslate2](https://github.com/OpenNMT/CTranslate2)** — the inference engine underneath faster-whisper. MIT license.
+- **[PyTorch](https://pytorch.org/)** — used for GPU detection and acceleration. BSD license.
+- **[PyAudio](https://people.csail.mit.edu/hubert/pyaudio/)** + **[PortAudio](http://www.portaudio.com/)** — the cross-platform audio capture layer. MIT-style licenses.
+- **[websockets](https://github.com/python-websockets/websockets)** — the WebSocket server library. BSD license.
+- **[NumPy](https://numpy.org/)** — audio buffer math. BSD license.
+- **[Inter](https://rsms.me/inter/)** by Rasmus Andersson — the display font, designed for screen readability. SIL Open Font License.
+- **[JetBrains Mono](https://www.jetbrains.com/lp/mono/)** — the monospace font used in the config panel. SIL Open Font License.
+
+The tools above do all the hard work. Cleartext just wires them together for live events and ships a display you can put on a TV.
+
+---
+
+## License
+
+Cleartext is released under the [MIT License](LICENSE) — use it, fork it, modify it, ship it, sell it. Just keep the copyright notice. The bundled fonts retain their original SIL Open Font License terms.
+

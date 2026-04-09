@@ -9,6 +9,18 @@ cd "$SCRIPT_DIR"
 VENV="$SCRIPT_DIR/.venv"
 HTTP_PORT="${HTTP_PORT:-8080}"
 
+# ── Detect platform ───────────────────────────────────────────────────────────
+# OS_KIND: macos | wsl | linux
+OS_KIND="linux"
+case "$(uname -s)" in
+    Darwin) OS_KIND="macos" ;;
+    Linux)
+        if grep -qiE '(microsoft|wsl)' /proc/version 2>/dev/null; then
+            OS_KIND="wsl"
+        fi
+        ;;
+esac
+
 # ── Sanity checks ─────────────────────────────────────────────────────────────
 if [ ! -d "$VENV" ]; then
     echo ""
@@ -24,7 +36,7 @@ source "$VENV/bin/activate"
 # ── Check microphone ──────────────────────────────────────────────────────────
 echo ""
 echo "  ┌─────────────────────────────────────┐"
-echo "  │   WhisperLive — Starting up…        │"
+echo "  │   Cleartext — Starting up…          │"
 echo "  └─────────────────────────────────────┘"
 echo ""
 
@@ -61,7 +73,15 @@ httpd.serve_forever()
 " &>/dev/null &
 HTTP_PID=$!
 
-LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+# Get the LAN IP — different commands per platform
+case "$OS_KIND" in
+    macos)
+        LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)
+        ;;
+    *)
+        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+        ;;
+esac
 echo "  ✓ Display server: http://${LOCAL_IP:-localhost}:$HTTP_PORT/display.html"
 
 # ── Clean up background processes on exit ─────────────────────────────────────
@@ -77,19 +97,31 @@ trap cleanup INT TERM
     sleep 4   # wait for server to be ready
     DISPLAY_URL="http://localhost:$HTTP_PORT/display.html"
 
-    # Try to open on the second display (TV) if one is connected
-    # Falls back gracefully to default display if not
-    if command -v xrandr &>/dev/null; then
-        SECOND=$(xrandr --query | grep ' connected' | awk '{print $1}' | sed -n '2p')
-        if [ -n "$SECOND" ]; then
-            echo "  ✓ Second display detected ($SECOND) — opening transcript there"
-        fi
-    fi
-
-    xdg-open "$DISPLAY_URL" 2>/dev/null || \
-    google-chrome --new-window "$DISPLAY_URL" 2>/dev/null || \
-    firefox "$DISPLAY_URL" 2>/dev/null || \
-    echo "  → Open $DISPLAY_URL manually in your browser"
+    case "$OS_KIND" in
+        macos)
+            open "$DISPLAY_URL" 2>/dev/null || \
+            echo "  → Open $DISPLAY_URL manually in your browser"
+            ;;
+        wsl)
+            # wslview ships with wslu; falls back to powershell.exe start
+            wslview "$DISPLAY_URL" 2>/dev/null || \
+            powershell.exe /c start "$DISPLAY_URL" 2>/dev/null || \
+            echo "  → Open $DISPLAY_URL manually in your browser"
+            ;;
+        *)
+            # Linux: report a second display if one is wired up
+            if command -v xrandr &>/dev/null; then
+                SECOND=$(xrandr --query | grep ' connected' | awk '{print $1}' | sed -n '2p')
+                if [ -n "$SECOND" ]; then
+                    echo "  ✓ Second display detected ($SECOND) — opening transcript there"
+                fi
+            fi
+            xdg-open "$DISPLAY_URL" 2>/dev/null || \
+            google-chrome --new-window "$DISPLAY_URL" 2>/dev/null || \
+            firefox "$DISPLAY_URL" 2>/dev/null || \
+            echo "  → Open $DISPLAY_URL manually in your browser"
+            ;;
+    esac
 ) &
 
 # ── Start server with auto-restart ────────────────────────────────────────────
