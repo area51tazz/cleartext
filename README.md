@@ -1,268 +1,162 @@
-# WhisperLive Docker Setup
+# Cleartext
 
-Real-time speech transcription via WebSocket, running fully locally.
-Server-client model: the server does all the heavy lifting, the client just streams audio.
+Real-time speech transcription for live events — displayed on a TV or any screen on the network. Designed to make panels, talks, and roundtables accessible without a captioning service.
 
-## Quick Start (Mac — Apple Silicon)
+**No internet required at runtime. No API keys. No cloud.**
+
+---
+
+## How it works
+
+A laptop listens to a microphone, transcribes speech using [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and broadcasts a rolling transcript over WebSocket. Any device on the same network — TV, phone, tablet, laptop — can open the display in a browser.
+
+```
+Microphone → server.py → WebSocket (port 9090)
+                       → display.html (TV, phones, tablets)
+```
+
+Silence gaps between speakers automatically start a new paragraph. The display is fullscreen, high-contrast, and readable from across a room.
+
+---
+
+## Quick start — Ubuntu (recommended)
+
+**One-time setup** (needs internet + sudo, ~5–10 minutes):
 
 ```bash
-# 1. Clone this setup
-git clone <this-repo> whisperlive && cd whisperlive
+git clone https://github.com/area51tazz/cleartext.git
+cd cleartext
+bash setup.sh
+```
 
-# 2. Build the native ARM64 image (first build ~3-5 mins, downloads ~1GB)
-docker compose --profile mac build
+This installs dependencies, creates a Python venv, downloads the Whisper model, bundles fonts, and creates a desktop shortcut.
 
-# 3. Start the server
+**Event day** (no internet needed):
+
+```bash
+bash start.sh
+```
+
+The display opens automatically in your browser. Drag it to the HDMI-connected TV and press **F** for fullscreen.
+
+### Audience access
+
+`start.sh` prints a URL like `http://192.168.x.x:8080/display.html`. Anyone on the same WiFi can open it on their phone or laptop — the WebSocket address is detected automatically, no configuration needed.
+
+---
+
+## Quick start — Docker (Mac / NUC / homelab)
+
+```bash
+git clone https://github.com/area51tazz/cleartext.git
+cd cleartext
+
+# Apple Silicon Mac
+docker compose --profile mac build   # first time only
 docker compose --profile mac up -d
 
-# 4. Check it's healthy
-docker compose logs -f
-
-# 5. Install the Python client on your Mac (outside Docker)
-pip install whisper-live
-
-# 6. Test with mic input
-python3 test_client.py
-
-# 7. Test with a file
-python3 test_client.py --file /path/to/audio.wav
-```
-
-The server listens on `ws://localhost:9090`.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────┐
-│  Your Mac / any client                  │
-│  • Python client (test_client.py)       │
-│  • Chrome/Firefox extension             │
-│  • iOS app                              │
-└──────────────┬──────────────────────────┘
-               │ WebSocket ws://host:9090
-               │
-┌──────────────▼──────────────────────────┐
-│  WhisperLive Server (Docker)            │
-│  • faster-whisper (CTranslate2)         │
-│  • VAD (Silero)                         │
-│  • Multi-client WebSocket server        │
-└─────────────────────────────────────────┘
-```
-
----
-
-## Deployment Profiles
-
-| Profile  | Target            | Image                              | Notes                              |
-|----------|-------------------|------------------------------------|-------------------------------------|
-| `mac`    | Apple Silicon Mac | Built locally (ARM64)              | CPU-only, ~3-4x real-time on M-series |
-| `cpu`    | NUC x86_64       | `ghcr.io/collabora/whisperlive-cpu` | Pre-built, pull-and-run            |
-| `gpu`    | NUC + NVIDIA      | `ghcr.io/collabora/whisperlive-gpu` | Requires nvidia-container-toolkit  |
-
-### NUC (x86_64, CPU)
-```bash
+# x86 CPU-only
 docker compose --profile cpu up -d
-```
 
-### NUC (x86_64, NVIDIA GPU)
-```bash
-# Prerequisites: nvidia-container-toolkit installed on host
-# https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+# x86 + NVIDIA GPU
 docker compose --profile gpu up -d
 ```
 
-### Future: Asus Ascent GX-10 (if running Linux)
-The GX-10 uses NVIDIA Jetson AGX Orin under the hood. Use the GPU profile but
-you may need to build from source targeting `linux/arm64` with CUDA support.
-Contact Collabora for TensorRT engine builds — that backend gives the best
-latency on Jetson hardware.
+Then open `display.html` in a browser and press **C** to configure the server address.
+
+### Docker deployment profiles
+
+| Profile | Target | Notes |
+|---------|--------|-------|
+| `mac` | Apple Silicon | Built locally (ARM64), CPU-only |
+| `cpu` | x86_64 NUC | Pre-built image, pull-and-run |
+| `gpu` | x86_64 + NVIDIA | Requires nvidia-container-toolkit |
+
+---
+
+## Display features
+
+- **Fullscreen, dark background** — readable from across a large room
+- **Paragraph breaks** — silence gaps of 3+ seconds start a new paragraph automatically
+- **Status dot** — green (live), amber (signal delayed 8s+), red (no signal 15s+)
+- **Auto-reconnect** — clients reconnect automatically if the server restarts
+- **Multi-client** — up to 50 simultaneous viewers (configurable)
+- **Mobile responsive** — works on phones and tablets
+- **Offline fonts** — Inter + JetBrains Mono bundled, no internet needed
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `F` | Toggle fullscreen |
+| `C` | Open config panel (server address, event name) |
+| `R` | Clear transcript |
+| `Esc` | Close config panel |
 
 ---
 
 ## Configuration
 
-All server parameters are set via environment variables:
+### Ubuntu native (server.py / start.sh)
 
-| Variable              | Default          | Options                                    |
-|-----------------------|------------------|--------------------------------------------|
-| `WHISPER_MODEL`       | `small`          | `tiny`, `base`, `small`, `medium`, `large-v3` |
-| `WHISPER_BACKEND`     | `faster_whisper` | `faster_whisper`, `openvino`, `tensorrt`   |
-| `MAX_CLIENTS`         | `4`              | Any integer                                |
-| `MAX_CONNECTION_TIME` | `600`            | Seconds                                    |
-| `OMP_NUM_THREADS`     | `4`              | Match your CPU core count                  |
-
-Override in `docker-compose.yml` under `environment:` or pass via `-e`:
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `WHISPER_MODEL` | `medium` | Model size: `small`, `medium`, `large-v3` |
+| `WHISPER_PORT` | `9090` | WebSocket port |
+| `HTTP_PORT` | `8080` | Display HTTP server port |
+| `MAX_CLIENTS` | `50` | Max simultaneous display connections |
 
 ```bash
-docker run -e WHISPER_MODEL=medium -e OMP_NUM_THREADS=8 -p 9090:9090 whisperlive-arm64:local
+WHISPER_MODEL=large-v3 bash start.sh
 ```
 
-### Model size guide (Apple Silicon performance, faster-whisper backend)
+### Docker (run_server.py)
 
-| Model    | Size  | ~VRAM / RAM | Approx speed on M2 Pro | Use case                    |
-|----------|-------|-------------|------------------------|-----------------------------|
-| tiny     | 75MB  | ~1GB        | ~10x realtime          | Quick demos, low latency    |
-| base     | 145MB | ~1GB        | ~7x realtime           | Good accuracy, fast         |
-| **small**| 460MB | ~2GB        | ~4x realtime           | **Recommended starting point** |
-| medium   | 1.5GB | ~5GB        | ~2x realtime           | High accuracy, multilingual |
-| large-v3 | 3GB   | ~10GB       | ~0.5-1x realtime       | Best quality, slower        |
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `WHISPER_MODEL` | `small` | Model size |
+| `WHISPER_BACKEND` | `faster_whisper` | Backend engine |
+| `MAX_CLIENTS` | `4` | Concurrent client limit |
+| `MAX_CONNECTION_TIME` | `600` | Client timeout (seconds) |
+| `OMP_NUM_THREADS` | `4` | CPU thread count |
 
-`small` is the sweet spot for real-time use on a Mac.
+### Model size guide
+
+| Model | Size | GPU latency | CPU latency | Notes |
+|-------|------|-------------|-------------|-------|
+| small | 460MB | <1s | ~2-3s | Fast, good for clear speech |
+| **medium** | 1.5GB | <1s | ~5-8s | **Default — best balance** |
+| large-v3 | 3GB | ~1s | ~15s+ | Best accuracy, slow on CPU |
 
 ---
 
-## Model caching
+## Hardware
 
-Models are cached in `./models/` (bind-mounted into the container).
-First run will download automatically. Subsequent starts are instant.
+**Best:** Ubuntu laptop with NVIDIA GPU — sub-second latency, simple mic setup.
 
-To pre-download a specific model:
-```bash
-docker run --rm -v $(pwd)/models:/root/.cache/whisper-live \
-    -e WHISPER_MODEL=medium \
-    whisperlive-arm64:local \
-    python3 -c "from faster_whisper import WhisperModel; WhisperModel('medium', download_root='/root/.cache/whisper-live')"
-```
-
----
-
-## Live Display (HDMI TV)
-
-`display.html` is a full-screen transcript viewer that connects directly to the WhisperLive
-WebSocket and renders a rolling, large-type transcript — designed to be readable from across a room.
-
-### Setup at the event (Ubuntu native)
-
-```
-Laptop
-  ├── HDMI cable → TV
-  ├── server.py (WebSocket on port 9090) + HTTP server (port 8080)
-  ├── Microphone → laptop audio input
-  └── Browser: display opens automatically, drag to TV, press F for fullscreen
-```
-
-**Step by step:**
-
-1. Run `bash start.sh` (or double-click "Start Transcription" on the Desktop)
-2. Display opens automatically in the browser after ~4 seconds
-3. Press **C** to set the event name, click Connect
-4. Drag the browser window to the TV display, press **F** for fullscreen
-5. Start speaking — transcript appears in under 1 second with GPU
-
-The server auto-restarts if it crashes (up to 5 times). Logs are saved to `transcription-YYYY-MM-DD.log`.
-
-### Setup at the event (Docker — Mac/NUC)
-
-1. Start the server: `docker compose --profile mac up -d`
-2. Open `http://localhost:8080/display.html` in a browser
-3. Press **C** to configure, click Connect
-
-### Keyboard shortcuts (while display.html is focused)
-
-| Key | Action |
-|-----|--------|
-| `F` | Toggle fullscreen |
-| `C` | Open/close config panel |
-| `R` | Clear transcript (new session) |
-| `Esc` | Close config panel |
-
-### Running the display on a different laptop
-
-`start.sh` runs an HTTP server on port 8080. From another machine on the same network:
-
-1. Open `http://<transcription-laptop-ip>:8080/display.html`
-2. Press **C** and set the server address to `<transcription-laptop-ip>:9090`
-
-The page auto-reconnects if the connection drops.
-
-### Status indicator
-
-The dot in the top-right corner shows connection health:
-- **Green** — connected and receiving messages
-- **Amber** — connected but no message received for 8+ seconds
-- **Red** — no signal for 15+ seconds or disconnected
-
----
-
-## Browser Extension
-
-Once the server is running, install the Chrome or Firefox extension
-from the `Audio-Transcription-Chrome` / `Audio-Transcription-Firefox` directories
-in the WhisperLive repo. These let you transcribe browser audio directly.
-
-```bash
-git clone https://github.com/collabora/WhisperLive
-# Chrome: Load unpacked from Audio-Transcription-Chrome/
-# Firefox: Load temporary add-on from Audio-Transcription-Firefox/
-```
-
----
-
-## Homelab: Running on a NUC as a service
-
-On your NUC host, copy this directory and create a systemd service:
-
-```bash
-scp -r . user@nuc-hostname:/opt/whisperlive
-
-# On the NUC:
-cat > /etc/systemd/system/whisperlive.service << 'EOF'
-[Unit]
-Description=WhisperLive Transcription Server
-After=docker.service
-Requires=docker.service
-
-[Service]
-WorkingDirectory=/opt/whisperlive
-ExecStart=/usr/bin/docker compose --profile cpu up
-ExecStop=/usr/bin/docker compose --profile cpu down
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl enable --now whisperlive
-```
-
-Then point your Mac client at the NUC's IP:
-```bash
-python3 test_client.py --server 192.168.1.x
-```
+**Also works:** Any x86/ARM64 machine with Docker. CPU-only is fine for small events (medium model ~5-8s latency). GPU drops that to under 1 second.
 
 ---
 
 ## Troubleshooting
 
-**Build fails on M1/M2/M3:**
-Make sure Docker Desktop is the Apple Silicon version (not Rosetta). Check:
+**No microphone detected on startup**
+Plug in a microphone and re-run `start.sh`. The built-in mic works; a USB or XLR interface is better for a room.
+
+**Display connects but text stops appearing**
+The server logs to `transcription-YYYY-MM-DD.log` — check that for errors. The status dot will go amber/red if the server stops sending.
+
+**Transcript appears on server but not in browser**
+Check that port 9090 isn't blocked by a firewall. On Ubuntu: `sudo ufw allow 9090`.
+
+**Docker: slow transcription**
+Lower `OMP_NUM_THREADS` — too many threads can hurt performance. Try `OMP_NUM_THREADS=4` as a baseline.
+
+**Docker: build fails on M1/M2/M3**
+Make sure Docker Desktop is the Apple Silicon native version (not Rosetta):
 ```bash
-docker info | grep Architecture
-# Should show: aarch64 or arm64
+docker info | grep Architecture   # should show aarch64 or arm64
 ```
 
-**Server starts but client can't connect:**
-```bash
-# Check the container is running and port is exposed
-docker ps
-# Check server logs
-docker compose logs whisperlive
-# Test port directly
-nc -zv localhost 9090
-```
-
-**Slow transcription:**
-- Reduce `OMP_NUM_THREADS` if overloading CPU (counter-intuitively, too many threads can hurt)
-- Switch to `tiny` or `base` model for lower latency
-- `small` with `OMP_NUM_THREADS=4` is usually the best balance on M-series
-
-**"Model not found" on first start:**
-Normal — it's downloading. Watch `docker compose logs -f` and wait for
-`INFO: Model loaded` before connecting a client.
-
-**Port 9090 conflict:**
-Change the host port mapping in docker-compose.yml: `"9091:9090"` then
-connect clients with `--port 9091`.
+**Port conflict**
+Change `HTTP_PORT` or `WHISPER_PORT` via environment variable, or edit the port mapping in `docker-compose.yml`.
